@@ -4,16 +4,42 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"strconv"
+	"unicode"
 
 	fileReader "github.com/scottkerkvliet/advent-of-code-2023/utils/file-reader"
 )
 
 /********** Part 1 **********/
+func getNumberFromLine(line string) (int, error) {
+	var first, last rune
+	for _, char := range line {
+		if unicode.IsDigit(char) {
+			if first == 0 {
+				first = char
+			}
+			last = char
+		}
+	}
+
+	value, err := strconv.Atoi(string(first) + string(last))
+	if err != nil {
+		return 0, err
+	}
+	return value, nil
+}
+
 func part1(file string) error {
-	_, err := fileReader.ReadFileByLine[string](file, nil)
+	values, err := fileReader.ReadFileByLine(file, getNumberFromLine)
 	if err != nil {
 		return err
 	}
+
+	sum := 0
+	for _, value := range values {
+		sum += value
+	}
+	fmt.Printf("The sum of all values was %v\n", sum)
 	return nil
 }
 

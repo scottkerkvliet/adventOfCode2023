@@ -6,7 +6,7 @@ import (
 )
 
 /***** Types *****/
-type LineReader[T any] func(string) T
+type LineReader[T any] func(string) (T, error)
 
 /***** Methods *****/
 func ReadFileByLine[K any](path string, lr LineReader[K]) ([]K, error) {
@@ -18,7 +18,11 @@ func ReadFileByLine[K any](path string, lr LineReader[K]) ([]K, error) {
 	var values []K
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		values = append(values, lr(scanner.Text()))
+		value, err := lr(scanner.Text())
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
 	}
 
 	return values, nil
