@@ -225,16 +225,39 @@ func part1(file string) error {
 	minLocation := math.MaxInt
 	for _, seed := range seeds {
 		seedValues := almanac.FindSeedValues(seed)
-		fmt.Println(seedValues.String())
+		// fmt.Println(seedValues.String())
 		minLocation = min(minLocation, int(seedValues.loc))
 	}
 
-	fmt.Printf("The minimum seed location is %v\n", minLocation)
+	fmt.Printf("The minimum seed location in part 1 is %v\n", minLocation)
 	return nil
 }
 
+// Brute force got 12634632
 func part2(file string) error {
-	fmt.Println("Part 2 is not implemented.")
+	scanner, err := fileReader.GetFileScanner(file)
+	if err != nil {
+		return err
+	}
+	seedNums, almanac, err := readAlmanacFile(scanner)
+	if err != nil {
+		return err
+	}
+
+	if len(seedNums)%2 != 0 {
+		return fmt.Errorf("Expected even number of seeds, got %v", len(seedNums))
+	}
+	minLocation := math.MaxInt
+	for i := 0; i < len(seedNums); i += 2 {
+		// Iterate, where index i is the start number and i+1 is the number of cycles
+		for seed := seedNums[i]; seed < seedNums[i]+seedNums[i+1]; seed++ {
+			seedValues := almanac.FindSeedValues(seed)
+			// fmt.Println(seedValues.String())
+			minLocation = min(minLocation, int(seedValues.loc))
+		}
+	}
+
+	fmt.Printf("The minimum seed location in part 2 is %v\n", minLocation)
 	return nil
 }
 
