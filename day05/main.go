@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -44,7 +45,15 @@ type Mapper[S ~int, D ~int] struct {
 	length      int
 }
 
-func (m *Mapper[S, D]) GetMapping(source S) (D, bool) {
+func (m *Mapper[S, D]) destinationEnd() D {
+	return m.destination + D(m.length)
+}
+
+func (m *Mapper[S, D]) sourceEnd() S {
+	return m.source + S(m.length)
+}
+
+func (m *Mapper[S, D]) GetDestination(source S) (D, bool) {
 	diff := int(source) - int(m.source)
 	if diff < 0 || int(diff) >= m.length {
 		return 0, false
@@ -52,9 +61,17 @@ func (m *Mapper[S, D]) GetMapping(source S) (D, bool) {
 	return m.destination + D(diff), true
 }
 
+func (m *Mapper[S, D]) GetSource(destination D) (S, bool) {
+	diff := int(destination) - int(m.destination)
+	if diff < 0 || int(diff) >= m.length {
+		return 0, false
+	}
+	return m.source + S(diff), true
+}
+
 func GetDestinationFromMappers[S ~int, D ~int](source S, mappers []*Mapper[S, D]) D {
 	for _, mapper := range mappers {
-		if d, ok := mapper.GetMapping(source); ok {
+		if d, ok := mapper.GetDestination(source); ok {
 			return d
 		}
 	}
@@ -81,6 +98,94 @@ func (a *Almanac) FindSeedValues(seed Seed) *SeedValues {
 	sv.humid = GetDestinationFromMappers(sv.temp, a.humidMaps)
 	sv.loc = GetDestinationFromMappers(sv.humid, a.locMaps)
 	return sv
+}
+
+/********** More efficient methods **********/
+
+// Convert indices (if any) that can map from S to D in this range to a new mapper.
+// Also return sets of intermediate mappers whose indices do not match.
+func CombineIndividualMappers[S ~int, I ~int, D ~int](first *Mapper[S, I], second *Mapper[I, D]) (*Mapper[S, D], []*Mapper[S, I], []*Mapper[I, D]) {
+	// No overlap
+	if first.destination > second.sourceEnd() || first.destinationEnd() < second.source {
+		return nil, []*Mapper[S, I]{first}, []*Mapper[I, D]{second}
+	}
+
+	// Find the combined mapper
+	minI := max(first.destination, second.source)
+	maxI := min(first.destinationEnd(), second.sourceEnd())
+	combinedLen := int(maxI - minI + 1)
+	combinedDest, _ := second.GetDestination(minI)
+	combinedSource, _ := first.GetSource(minI)
+	combinedMapper := &Mapper[S, D]{source: combinedSource, destination: combinedDest, length: combinedLen}
+
+	// Find the unmatched indices in source
+	var unmatchedSources []*Mapper[S, I]
+	if first.destination < minI {
+		unmatchedSources = append(unmatchedSources, &Mapper[S, I]{source: first.source, destination: first.destination, length: int(minI - first.destination)})
+	}
+	if first.destinationEnd() > maxI {
+		len := int(first.destinationEnd() - maxI)
+		unmatchedSources = append(unmatchedSources, &Mapper[S, I]{source: first.sourceEnd() - S(len) + 1, destination: first.destinationEnd() - I(len) + 1, length: len})
+	}
+
+	// Find the unmatched indices in destination
+	var unmatchedDests []*Mapper[I, D]
+	if second.source < minI {
+		unmatchedDests = append(unmatchedDests, &Mapper[I, D]{source: second.source, destination: second.destination, length: int(minI - second.source)})
+	}
+	if second.sourceEnd() > maxI {
+		len := int(second.sourceEnd() - maxI)
+		unmatchedDests = append(unmatchedDests, &Mapper[I, D]{source: second.sourceEnd() - I(len) + 1, destination: second.destinationEnd() - D(len) + 1, length: len})
+	}
+
+	return combinedMapper, unmatchedSources, unmatchedDests
+}
+
+func FlattenMapper[S ~int, I ~int, D ~int](start *Mapper[S, I], ends []*Mapper[I, D]) ([]*Mapper[S, D], []*Mapper[I, D]) {
+	if len(ends) == 0 {
+		return []*Mapper[S, D]{{source: start.source, destination: D(start.destination), length: start.length}}, nil
+	}
+	var finalMappers []*Mapper[S, D]
+	var dests []*Mapper[I, D]
+	combined, unmatchedSources, unmatchedDests := CombineIndividualMappers(start, ends[0])
+	finalMappers = append(finalMappers, combined)
+	dests = append(dests, unmatchedDests...)
+	for _, unmatchedSource := range unmatchedSources {
+		c, d := FlattenMapper(unmatchedSource, ends[1:])
+		finalMappers = append(finalMappers, c...)
+		unmatchedDests = append(unmatchedDests, d...)
+	}
+	return finalMappers, unmatchedDests
+}
+
+func FlattenMappers[S ~int, I ~int, D ~int](starts []*Mapper[S, I], ends []*Mapper[I, D]) []*Mapper[S, D] {
+	var finalMappers []*Mapper[S, D]
+	for _, start := range starts {
+		c, d := FlattenMapper(start, ends)
+		finalMappers = append(finalMappers, c...)
+		ends = d
+	}
+	for _, end := range ends {
+		finalMappers = append(finalMappers, &Mapper[S, D]{source: S(end.source), destination: end.destination, length: end.length})
+	}
+	return finalMappers
+}
+
+func SortMappersByDestination[S ~int, D ~int](mappers []*Mapper[S, D]) {
+	slices.SortFunc(mappers, func(a *Mapper[S, D], b *Mapper[S, D]) int {
+		return int(a.destination - b.destination)
+	})
+}
+
+func FlattenAlmanac(a *Almanac) []*Mapper[Seed, Location] {
+	tempToLoc := FlattenMappers(a.humidMaps, a.locMaps)
+	lightToLoc := FlattenMappers(a.tempMaps, tempToLoc)
+	waterToLoc := FlattenMappers(a.lightMaps, lightToLoc)
+	fertToLoc := FlattenMappers(a.waterMaps, waterToLoc)
+	soilToLoc := FlattenMappers(a.fertMaps, fertToLoc)
+	seedToLoc := FlattenMappers(a.soilMaps, soilToLoc)
+	SortMappersByDestination(seedToLoc)
+	return seedToLoc
 }
 
 /********** File Functions **********/
@@ -227,6 +332,29 @@ func part1(file string) error {
 		seedValues := almanac.FindSeedValues(seed)
 		// fmt.Println(seedValues.String())
 		minLocation = min(minLocation, int(seedValues.loc))
+	}
+
+	fmt.Printf("The minimum seed location in part 1 is %v\n", minLocation)
+	return nil
+}
+
+func part1v2(file string) error {
+	scanner, err := fileReader.GetFileScanner(file)
+	if err != nil {
+		return err
+	}
+	seeds, almanac, err := readAlmanacFile(scanner)
+	if err != nil {
+		return err
+	}
+
+	mappers := FlattenAlmanac(almanac)
+
+	minLocation := math.MaxInt
+	for _, seed := range seeds {
+		loc := GetDestinationFromMappers(seed, mappers)
+		fmt.Printf("Seed %v, location %v\n", seed, loc)
+		minLocation = min(minLocation, int(loc))
 	}
 
 	fmt.Printf("The minimum seed location in part 1 is %v\n", minLocation)
